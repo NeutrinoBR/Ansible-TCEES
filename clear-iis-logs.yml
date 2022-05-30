@@ -1,0 +1,15 @@
+# Playbook to Clear IIS Logs
+---
+- hosts: webservers-iis
+  gather_facts: no
+  tasks:
+  - name: Removendo Logs Inetpub do IIS
+    win_shell: Get-ChildItem C:\inetpub\logs *.log -recurse | Where-Object { $_.LastWriteTime -lt ((get-date).AddDays(-30)) } | Remove-Item
+    become_user: administrador
+    become_method: runas
+    ignore_errors: yes
+  - name: Removendo Logs HTTPERR do IIS
+    win_shell: Get-ChildItem C:\Windows\System32\LogFiles\HTTPERR *.log -recurse | Where-Object { $_.LastWriteTime -lt ((get-date).AddDays(-30)) } | Remove-Item
+    become_user: administrador
+    become_method: runas
+    ignore_errors: yes
