@@ -1,0 +1,230 @@
+# This playbook performs updates on windows servers on the servers included in the [win_update_2022] section of the inventory.
+#
+# * Run updates:
+# ansible-playbook update-windows-2022.yml -e @../../../passwd.yml --ask-vault-pass
+#
+# TODO:
+# - Change Block to Get restricted dates from ical. https://www.googleapis.com/calendar/v3/calendars/8i5m2ve06gcthnn1iecjcbvnsk@group.calendar.google.com/events?key=AIzaSyBuLTOaWX0_vbrWJtn6RJAo9XxnpraK3oc
+# 
+# REFERENCE:
+# https://github.com/credibleforce/packer/blob/d8226190a51dda1117f5b81d5e24fcace07c3b7a/ansible/windows_update_security_updates.yml
+# https://github.com/RobVerduijn/lab/blob/3f37f3fff12acc2d50835a16d7d299ed58d2a9f4/roles/windows_update/tasks/main.yml
+# https://github.com/modzilla99/windows-update/blob/5fb6d26f23faadd46f22e269c1202db8313877bb/roles/windows_updates/tasks/win_updates.yml
+# https://github.com/credibleforce/packer/blob/d8226190a51dda1117f5b81d5e24fcace07c3b7a/ansible/windows_update_security_updates.yml
+# https://github.com/1zjy/Ansible-application/blob/edd7538e59771eb50d1e89d5589dab6276cd240e/WindowsUpdate/win_updatepatches.yml
+# https://github.com/ptoal/toallab-automation/blob/825359ae53f5b4475684c0c26e43e8039cce386b/roles/oatakan.windows_update/tasks/updates-with-retry.yml
+
+---
+- name: Windows Updates
+  hosts: win_update_2022
+  gather_facts: true
+  #serial: 20
+  #strategy: free
+  #debugger: on_failed
+  tasks:
+    - name: Debug Facts
+      debug: 
+        msg: "{{ ansible_facts }}"
+    - name: Set nagios config
+      add_host:
+        hostname: '{{ update_nagios_hostname }}'
+        ansible_host: '{{ update_nagios_host }}'
+        ansible_port: '22'
+        ansible_become: true
+        ansible_become_user: root
+        ansible_become_pass: '{{ administrator_pass }}'
+    - name: Block to check if have any restriction at this date.
+      block:
+      - name: Restricted Dates
+        debug: 
+          msg: "{{ restricao_de_datas }}"
+      - name: Server Date & Time
+        debug:
+          msg: "{{ ansible_date_time.date }}"
+      - name: Check if the server date was include in restricted date.
+        set_fact:
+          restritivo: "{{1 if ansible_date_time.date in restricao_de_datas else 0}}"
+          servidor_restringido: "{{ ansible_host }}"
+      - name: Return of restriction.
+        debug:
+          msg: "{{ restritivo }}"
+      - name: Send e-mail if was restrict.
+        mail:
+          to: "{{ report_to }}"
+          sender: Ansible Report <ansible.report@tcees.tc.br>
+          subject: Ansible - Report Atualizações de Segurança
+          body: "O update executado em {{ ansible_date_time.date }} pelo {{ servidor_restringido }} foi em uma data restritiva."
+        delegate_to: '{{ update_nagios_hostname }}'
+        when: (restritivo|int == 1) 
+    - name: Block to clean WinUpdate Downlaod folder
+      block:
+      - name: Delete the folder
+        win_file:
+          path: C:\Windows\SoftwareDistribution\Download
+          state: absent
+        ignore_errors: true
+      - name: Create the folder
+        win_file:
+          path: C:\Windows\SoftwareDistribution\Download
+          state: directory
+        ignore_errors: true
+    - name: Block to check WSUS Health
+      block:
+      - name: Get the WSUS Status
+        win_uri: 
+          url: "https://{{wsus}}:8531/ClientWebService/Client.asmx"
+        register: wsus_output
+      - name: Show WSUS Status
+        debug:
+          var: wsus_output.status_code
+    - name: Block to update when date is not restricted and wsus OK.
+      block:
+        - name: Search for updates
+          win_updates:
+            state: searched
+            server_selection: managed_server
+            log_path: "c:\\tce\\update-ansible.log"
+          become: true
+          become_user: administrator
+          register: update_count
+        - name: Return Updates Pending
+          debug:
+            var: update_count
+        - name: Block to Nagios action
+          block:
+            - name: Scheduled 90 minutes Downtime
+              nagios:
+                action: downtime
+                minutes: 90
+                service: host
+                host: '{{ inventory_hostname|upper }}'
+                cmdfile: '/opt/nagios/var/rw/nagios.cmd'
+              delegate_to: '{{ update_nagios_hostname }}'
+          when: update_count.found_update_count|int >= 1 and (ansible_windows_domain_role != "Primary domain controller")
+        - name: Check if was FileServer or Always On and make a forced FailOver or Drain
+          block:
+          - name: Force Failover of SQLServer
+            block:
+            - name: Force Failover
+              win_shell: |
+                $AGs = Get-DbaAvailabilityGroup -SqlInstance $env:COMPUTERNAME|select AvailabilityReplicas,PrimaryReplica,AvailabilityGroup
+                Foreach ($AG in $AGs) {
+                  if ($AG.PrimaryReplica -eq $env:COMPUTERNAME){
+                    $Secundario = $AG.AvailabilityReplicas | Where-Object {$_.Name -notlike $AG.PrimaryReplica}
+                    Invoke-DbaAgFailover -SqlInstance $env:COMPUTERNAME -AvailabilityGroup $AG.AvailabilityGroup -Confirm:$false
+                  }
+                }     
+              register: agcluster
+            - name: Print return information from the previous task
+              debug:
+                var: agcluster
+            when: hostvars[inventory_hostname].ag|bool == true
+          - name: 10 seconds pause to complete safe failover
+            pause:
+              seconds: 10
+          - name: ClusterNode suspend
+            block:
+            - name: É um FS Cluster? Suspend do Nós - Block 1
+              win_shell: Get-ClusterNode|Where-Object {($_.Name -eq $env:COMPUTERNAME) -and ($_.State -eq "Up")}|Suspend-ClusterNode -Drain
+              register: fscluster
+            - name: Print return information from the previous task
+              debug:
+                var: fscluster
+            when: hostvars[inventory_hostname].drainnode|bool == true
+          when: (hostvars[inventory_hostname].drainnode is defined or hostvars[inventory_hostname].ag is defined) and update_count.found_update_count|int >= 1
+        - name: Update pendings updates
+          win_updates:
+            category_names:
+              - CriticalUpdates
+              - SecurityUpdates
+              - UpdateRollups
+              - Updates
+            server_selection: managed_server
+            stage: installed
+            reboot: yes
+            use_scheduled_task: no
+            reboot_timeout: 1800
+            log_path: "c:\\tce\\update-ansible.log"
+          become: true
+          become_user: administrator
+          when: update_count.found_update_count|int >= 1
+      rescue:
+        - name: Reboot before new attempt
+          win_reboot: 
+        - name: Determinar se é um FS ou AG e remove ou faz FailOver - Block 1
+          block:
+          - name: Bloco - Forçar Failover do SQLServer
+            block:
+            - name: É um AG Cluster? Força o FailOver - Block 1
+              win_shell: |
+                $AGs = Get-DbaAvailabilityGroup -SqlInstance $env:COMPUTERNAME|select AvailabilityReplicas,PrimaryReplica,AvailabilityGroup
+                Foreach ($AG in $AGs) {
+                  if ($AG.PrimaryReplica -eq $env:COMPUTERNAME){
+                    $Secundario = $AG.AvailabilityReplicas | Where-Object {$_.Name -notlike $AG.PrimaryReplica}
+                    Invoke-DbaAgFailover -SqlInstance $env:COMPUTERNAME -AvailabilityGroup $AG.AvailabilityGroup -Confirm:$false
+                  }
+                }     
+              register: agcluster
+            - name: Print return information from the previous task
+              debug:
+                var: agcluster
+            when: hostvars[inventory_hostname].ag|bool == true
+          - name: Pausa por 10segundos no Script para Garantir o Failover do AG
+            pause:
+              seconds: 10
+          - name: Block - Forçar FailOver de FileServer
+            block:
+            - name: É um FS Cluster? Suspend do Nós - Block 1
+              win_shell: Get-ClusterNode|Where-Object {($_.Name -eq $env:COMPUTERNAME) -and ($_.State -eq "Up")}|Suspend-ClusterNode
+              register: fscluster
+            - name: Print return information from the previous task
+              debug:
+                var: fscluster
+            when: hostvars[inventory_hostname].drainnode|bool == true
+          when: (hostvars[inventory_hostname].drainnode is defined or hostvars[inventory_hostname].ag is defined) and update_count.found_update_count|int >= 1
+        - name: Atualiza Servidores - Rescue - Rescue do Block 3
+          win_updates:
+            category_names:
+              - CriticalUpdates
+              - SecurityUpdates
+              - UpdateRollups
+              - Updates
+            server_selection: managed_server
+            stage: installed
+            reboot: yes
+            use_scheduled_task: no
+            reboot_timeout: 1800
+            log_path: "c:\\tce\\update-ansible.log"
+          become: true
+          become_user: administrator
+      always:
+        - name: Buscando por updates atrasados - Always Block 3
+          win_updates:
+            state: searched
+            server_selection: managed_server
+            log_path: "c:\\tce\\update-ansible.log"
+          become: true
+          become_user: administrator
+          register: update_count
+        - name: Listar updates atrasados - Always Block 3
+          debug:
+            var: update_count
+        - name: Bloco para remoção de Arquivos antigos de atualização
+          block:
+          - name: Deletando a pasta de Downloads do WinUpdate
+            win_file:
+              path: C:\Windows\SoftwareDistribution\Download
+              state: absent
+            ignore_errors: true
+          - name: Recriando a pasta de Downloads do Windows
+            win_file:
+              path: C:\Windows\SoftwareDistribution\Download
+              state: directory
+            ignore_errors: true
+        - name: Block Somente se Drainnode está definido
+          block:
+          - name: Retornar o Cluster para o FS
+            win_shell: Get-ClusterNode|Where-Object {($_.Name -eq $env:COMPUTERNAME) -and ($_.State -eq "Paused")}|Resume-ClusterNode
+            when: hostvars[inventory_hostname].drainnode|bool == true
+          when: hostvars[inventory_hostname].drainnode is defined
+      when: (wsus_output.status_code|int == 200) and (restritivo|int == 0) 
