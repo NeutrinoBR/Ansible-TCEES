@@ -1,0 +1,87 @@
+# Playbook to update RHEL and Debian Distros. Only security updates. To Debian, use a third party solution.
+# Use:
+#     ansible-playbook update-linux-2022.yml -e @../../../passwd.yml --ask-vault-pass
+---
+- name: Upgrade and Reboot RHEL & Debian family Linux distros
+  hosts: linux_update_2022
+  gather_facts: yes
+  become: true
+  become_user: root
+  vars:
+    reboot_connect_timeout: 5
+    reboot_post_reboot_delay: 15
+    reboot_timeout: 600
+    ansible_become_pass: '{{ administrator_pass }}'
+  tasks:
+    - name: Print all available facts
+      debug:
+        var: ansible_os_family
+    - name: Block para ação com nagios
+      block:
+        - name: Define configurações do nagios
+          add_host:
+            hostname: '{{ update_nagios_hostname }}'
+            ansible_host: '{{ update_nagios_host }}'
+            ansible_port: '22'
+            ansible_become: true
+            ansible_become_user: root
+            ansible_become_pass: '{{ administrator_pass }}'
+        - name: Scheduled Downtime de 10 minutos no nagios para o hostname
+          nagios:
+            action: downtime
+            minutes: 10
+            service: host
+            host: '{{ inventory_hostname|upper }}'
+            cmdfile: '/opt/nagios/var/rw/nagios.cmd'
+          delegate_to: '{{ update_nagios_hostname }}'
+    - name: Bloco de Atualização para CentOS # Upgrade RHEL family (CentOS) OS packages - Bugfix & Security
+      block:
+        - name: Upgrade RHEL Family OS packages - BugFix
+          yum:
+            name: '*'
+            state: latest
+            update_cache: true
+            bugfix: true
+        - name: Upgrade RHEL Family OS packages - Security
+          yum:
+            name: '*'
+            state: latest
+            update_cache: true
+            security: true
+      when: ansible_os_family == "RedHat"
+      always:
+        - name: Verifica se há reboot necessário.
+          command: needs-restarting -r
+          register: result
+          ignore_errors: yes
+        - name: Executa o reboot se for necessário
+          reboot:
+            connect_timeout: "{{ reboot_connect_timeout }}"
+            post_reboot_delay: "{{ reboot_post_reboot_delay }}"
+            reboot_timeout: "{{ reboot_timeout }}"
+          when: result.rc == 1
+
+    - name: Bloco de Atualização para Debian e Ubuntu # Debian Family (Debian & Ubuntu) upgrade
+      block:
+        - name: Update all packages to their latest version
+          apt:
+            name: debsecan
+            state: latest
+            update_cache: true
+            cache_valid_time: 0
+            force_apt_get: yes
+        - name: Update all packages to their latest version
+          command:
+            cmd: "apt-get install $(debsecan --format packages) -y"
+      when: ansible_os_family == "Debian"
+      always:
+        - name: Verifica se há reboot necessário.
+          stat:
+            path: /var/run/reboot-required
+          register: reboot_required_file
+        - name: Reboot if required
+          reboot:
+            connect_timeout: "{{ reboot_connect_timeout }}"
+            post_reboot_delay: "{{ reboot_post_reboot_delay }}"
+            reboot_timeout: "{{ reboot_timeout }}"
+          when: reboot_required_file.stat.exists == true
