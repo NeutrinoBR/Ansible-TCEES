@@ -1,0 +1,9 @@
+# Playbook to Disable Print Spooler
+- hosts: windows_non_printserver
+  tasks:
+  - name: Desabilitar Spooler
+    win_service:
+      name: spooler
+      state: stopped
+      start_mode: disabled
+    
