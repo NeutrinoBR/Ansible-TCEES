@@ -1,0 +1,117 @@
+# Playbook to export IIS configuration
+---
+- hosts: webservers-iis
+  gather_facts: no
+  tasks:
+  - name: Criando pasta para o Dump
+    win_file:
+      path: C:\TCE\iis-export\
+      state: directory
+  - name: Exporta IIS Config - SITE
+    win_shell: C:\Windows\system32\inetsrv\appcmd list site /config /xml > C:\TCE\iis-export\site.xml
+    become_user: administrador
+    become_method: runas
+    ignore_errors: yes
+  - name: Exporta IIS Config - APP
+    win_shell: C:\Windows\system32\inetsrv\appcmd list app /config /xml > C:\TCE\iis-export\app.xml
+    become_user: administrador
+    become_method: runas
+    ignore_errors: yes
+  - name: Exporta IIS Config - VDIR
+    win_shell: C:\Windows\system32\inetsrv\appcmd list vdir /config /xml > C:\TCE\iis-export\vdir.xml
+    become_user: administrador
+    become_method: runas
+    ignore_errors: yes
+  - name: Exporta IIS Config - APPPOOL
+    win_shell: C:\Windows\system32\inetsrv\appcmd list apppool /config /xml > C:\TCE\iis-export\apppool.xml
+    become_user: administrador
+    become_method: runas
+    ignore_errors: yes
+  - name: Exporta IIS Config - CONFIG
+    win_shell: C:\Windows\system32\inetsrv\appcmd list config /config /xml > C:\TCE\iis-export\config.xml
+    become_user: administrador
+    become_method: runas
+    ignore_errors: yes
+  - name: Exporta IIS Config - WP
+    win_shell: C:\Windows\system32\inetsrv\appcmd list wp /config /xml > C:\TCE\iis-export\wp.xml
+    become_user: administrador
+    become_method: runas
+    ignore_errors: yes
+  - name: Exporta IIS Config - REQUEST
+    win_shell: C:\Windows\system32\inetsrv\appcmd list request /config /xml > C:\TCE\iis-export\request.xml
+    become_user: administrador
+    become_method: runas
+    ignore_errors: yes
+  - name: Exporta IIS Config - MODULE
+    win_shell: C:\Windows\system32\inetsrv\appcmd list module /config /xml > C:\TCE\iis-export\module.xml
+    become_user: administrador
+    become_method: runas
+    ignore_errors: yes
+  - name: Exporta IIS Config - BACKUP
+    win_shell: C:\Windows\system32\inetsrv\appcmd list backup /config /xml > C:\TCE\iis-export\backup.xml
+    become_user: administrador
+    become_method: runas  
+    ignore_errors: yes
+  - name: Exporta IIS Config - TRACE
+    win_shell: C:\Windows\system32\inetsrv\appcmd list trace /config /xml > C:\TCE\iis-export\trace.xml
+    become_user: administrador
+    become_method: runas  
+    ignore_errors: yes
+  - name: Copy a site source on the remote host
+    fetch:
+      src: C:\TCE\iis-export\site.xml
+      dest: /tmp/Documentacao_IIS_Config
+      remote_src: yes
+    ignore_errors: yes
+  - name: Copy a app source on the remote host
+    fetch:
+      src: C:\TCE\iis-export\app.xml
+      dest: /tmp/Documentacao_IIS_Config
+      remote_src: yes
+    ignore_errors: yes
+  - name: Copy a vdir source on the remote host
+    fetch:
+      src: C:\TCE\iis-export\vdir.xml
+      dest: /tmp/Documentacao_IIS_Config
+      remote_src: yes
+    ignore_errors: yes
+  - name: Copy a apppool source on the remote host
+    fetch:
+      src: C:\TCE\iis-export\apppool.xml
+      dest: /tmp/Documentacao_IIS_Config
+      remote_src: yes
+    ignore_errors: yes
+  - name: Copy a config source on the remote host
+    fetch:
+      src: C:\TCE\iis-export\config.xml
+      dest: /tmp/Documentacao_IIS_Config
+      remote_src: yes
+    ignore_errors: yes
+  - name: Copy a wp source on the remote host
+    fetch:
+      src: C:\TCE\iis-export\wp.xml
+      dest: /tmp/Documentacao_IIS_Config
+      remote_src: yes
+    ignore_errors: yes
+  - name: Copy a request source on the remote host
+    fetch:
+      src: C:\TCE\iis-export\request.xml
+      dest: /tmp/Documentacao_IIS_Config
+      remote_src: yes
+    ignore_errors: yes
+  - name: Copy a backup source on the remote host
+    fetch:
+      src: C:\TCE\iis-export\backup.xml
+      dest: /tmp/Documentacao_IIS_Config
+      remote_src: yes
+    ignore_errors: yes
+  - name: Copy a trace source on the remote host
+    fetch:
+      src: C:\TCE\iis-export\trace.xml
+      dest: /tmp/Documentacao_IIS_Config
+      remote_src: yes
+    ignore_errors: yes
+  - name: Removendo pasta do Dump
+    win_file:
+      path: C:\TCE\iis-export\
+      state: absent
